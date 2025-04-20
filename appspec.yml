@@ -1,29 +1,34 @@
 version: 0.0
 os: linux
 files:
-  - source: / # Copy everything from the build artifact root
-    destination: /var/www/photocomp-api # Destination directory on EC2
+  - source: /
+    destination: /var/www/photocomp-api
 file_exists_behavior: OVERWRITE
 hooks:
   BeforeInstall:
     - location: scripts/stop_server.sh
       timeout: 300
-      runas: ec2-user # Use 'ubuntu' if using Ubuntu AMI
+      runas: ec2-user
     - location: scripts/clean_directory.sh
       timeout: 300
-      runas: ec2-user # Use 'ubuntu' if using Ubuntu AMI
+      runas: ec2-user
   AfterInstall:
+    # ADD THIS HOOK - Run as root to fix permissions after agent copies files
+    - location: scripts/set_permissions.sh
+      timeout: 60
+      runas: root # <--- IMPORTANT: Run as root
+    # Subsequent hooks run as ec2-user with correct permissions
     - location: scripts/install_dependencies.sh
       timeout: 300
-      runas: ec2-user # Use 'ubuntu' if using Ubuntu AMI
+      runas: ec2-user
     - location: scripts/fetch_env_vars.sh
       timeout: 120
-      runas: ec2-user # Use 'ubuntu' if using Ubuntu AMI
+      runas: ec2-user
   ApplicationStart:
     - location: scripts/start_server.sh
       timeout: 300
-      runas: ec2-user # Use 'ubuntu' if using Ubuntu AMI
+      runas: ec2-user
   ValidateService:
     - location: scripts/validate_service.sh
       timeout: 60
-      runas: ec2-user # Use 'ubuntu' if using Ubuntu AMI
+      runas: ec2-user
