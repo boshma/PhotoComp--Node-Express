@@ -12,11 +12,12 @@
         "forceConsistentCasingInFileNames": true,
         "resolveJsonModule": true,
         "baseUrl": ".",
+        "rootDir": "src",
         "paths": {
             "@/*": ["src/*"]
         },
         "isolatedModules": true
     },
-    "include": ["src/**/*", "__tests__/**/*", "setupTests.ts"],
+    "include": ["src/**/*"],
     "exclude": ["node_modules"]
 }
