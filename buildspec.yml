@@ -1,0 +1,27 @@
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      nodejs: 18 # Or 20, depending on your project needs and CodeBuild image support
+    commands:
+      - echo Installing dependencies...
+      - npm ci # Use ci for faster, consistent installs in CI/CD
+  build:
+    commands:
+      - echo Building the project...
+      - npm run build # This executes 'tsc' as defined in your package.json
+  post_build:
+    commands:
+      - echo Build completed on `date`
+artifacts:
+  files:
+    - 'dist/**/*'
+    - 'package.json'
+    - 'package-lock.json'
+    - 'appspec.yml'
+    - 'scripts/**/*' # Include deployment scripts
+    - 'node_modules/**/*' # Include production node_modules
+  # If you prefer installing node_modules on the EC2 instance:
+  # - Remove 'node_modules/**/*' from files above
+  # - Ensure 'npm ci --production' is in the AfterInstall hook script
