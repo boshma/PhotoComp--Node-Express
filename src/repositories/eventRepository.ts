@@ -7,6 +7,7 @@ import {
     DeleteCommand,
     UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
+import { QueryCommandOutput } from '@aws-sdk/client-dynamodb'; // Import this
 
 import { AppError } from '../middleware/errorHandler';
 import { WeatherData } from '@/services/weatherService';
@@ -104,8 +105,8 @@ export class EventRepository {
                     },
                 })
             );
-
-            return response.Items as Event[];
+            // Use a safer type assertion
+            return (response.Items as unknown as Event[]) || [];
         } catch (error: any) {
             throw new AppError(`Failed to retrieve events: ${error.message}`, 500);
         }
@@ -135,7 +136,8 @@ export class EventRepository {
             );
 
             const items = response.Items as Event[];
-            return items[0]; // Return the first (and expected only) result.
+            // Use a safer type assertion
+            return items[0] as unknown as Event; // Return the first (and expected only) result.
         } catch (error: any) {
             throw new AppError(`Failed to retrieve event: ${error.message}`, 500);
         }
@@ -161,8 +163,8 @@ export class EventRepository {
                     },
                 })
             );
-
-            return response.Items as Event[];
+            // Use a safer type assertion
+            return (response.Items as unknown as Event[]) || [];
         } catch (error: any) {
             throw new AppError(`Failed to retrieve user events: ${error.message}`, 500);
         }
@@ -199,7 +201,8 @@ export class EventRepository {
                     })
                 );
 
-                const fetchedEvents = response.Items as Event[];
+                // Use a safer type assertion
+                const fetchedEvents = (response.Items as unknown as Event[]) || [];
                 publicEvents.push(...fetchedEvents.filter(event => event.isPublic));
 
                 // no more data to paginate
@@ -232,8 +235,8 @@ export class EventRepository {
             if (!result.Item) {
                 return null;
             }
-
-            return result.Item as EventUser;
+            // Use a safer type assertion
+            return result.Item as unknown as EventUser;
         } catch (error: any) {
             throw new AppError(`Failed to find Event-User Connection: ${error.message}`, 500);
         }
@@ -251,12 +254,11 @@ export class EventRepository {
 
             const result = await dynamoDb.send(new GetCommand(params));
 
-            // console.log(result.Item)
             if (!result.Item) {
                 return null;
             }
-
-            return result.Item as Event;
+            // Use a safer type assertion
+            return result.Item as unknown as Event;
         } catch (error: any) {
             throw new AppError(`Failed to find Event: ${error.message}`, 500);
         }
@@ -285,8 +287,8 @@ export class EventRepository {
             if (!updatedEvent.Attributes) {
                 throw new AppError('Event Publicity not updated', 400);
             }
-
-            return event as Event;
+            // Use a safer type assertion
+            return updatedEvent.Attributes as unknown as Event;
         } catch (error: any) {
             throw new AppError(`Failed to update Event's Publicity: ${error.message}`, 500);
         }
@@ -337,21 +339,22 @@ export class EventRepository {
             if (!result.Attributes) {
                 throw new AppError(`Failed to update event weather data`, 500);
             }
-
-            return result.Attributes as Event;
+            // Use a safer type assertion
+            return result.Attributes as unknown as Event;
         } catch (error: any) {
             throw new AppError(`Failed to update event weather data: ${error.message}`, 500);
         }
     }
 
     /**
-     * Gets all users attending an event
+     * Gets all users attending an event, returning the full EventUser items.
      * @param eventId The event's ID
-     * @returns Array of user IDs in format USER#userId
+     * @returns Array of EventUser objects representing attendees.
+     * @throws AppError if the database operation fails
      */
-    async getEventAttendees(eventId: string): Promise<string[]> {
+    async getEventAttendees(eventId: string): Promise<EventUser[]> {
         try {
-            const response = await dynamoDb.send(
+            const response: QueryCommandOutput = await dynamoDb.send(
                 new QueryCommand({
                     TableName: TABLE_NAME,
                     IndexName: 'GSI2PK-GSI2SK-INDEX',
@@ -361,6 +364,8 @@ export class EventRepository {
                         ':eventId': `EVENT#${eventId}`,
                         ':userPrefix': 'USER#',
                     },
+                    // Fetch all attributes
+                    ProjectionExpression: undefined, // Ensure all attributes are fetched
                 })
             );
 
@@ -368,8 +373,8 @@ export class EventRepository {
                 return [];
             }
 
-            // Extract the USER#userId values from GSI2SK
-            return response.Items.map(item => item.GSI2SK as string);
+            // *** FIX: Use a safer type assertion ***
+            return (response.Items as unknown as EventUser[]) || [];
         } catch (error: any) {
             throw new AppError(`Failed to get event attendees: ${error.message}`, 500);
         }
@@ -408,15 +413,15 @@ export class EventRepository {
     async deleteAllEventAttendance(eventId: string): Promise<boolean> {
         try {
             // First get all users attending the event
-            const attendees = await this.getEventAttendees(eventId);
+            const attendees = await this.getEventAttendees(eventId); // This now returns EventUser[]
 
             if (attendees.length === 0) {
                 return true; // No attendance records to delete
             }
 
             // Delete each attendance record
-            for (const attendeeId of attendees) {
-                const userId = attendeeId.split('#')[1]; // Extract user ID from USER#id format
+            for (const attendee of attendees) {
+                const userId = attendee.PK.split('#')[1]; // Extract user ID from PK
                 await this.removeAttendingEventRecord(userId, eventId);
             }
 
@@ -426,4 +431,3 @@ export class EventRepository {
         }
     }
 }
-

@@ -3,12 +3,12 @@ import { EventService } from '../services/eventService';
 import { OrgService } from '../services/orgService';
 import { EventRequest, Event, EventUser } from '../models/Event';
 import { Status } from '../models/Response';
-import { checkOrgAdmin } from '../middleware/OrgMiddleware';
+import { checkOrgAdmin, checkOrgMember } from '../middleware/OrgMiddleware'; // Added checkOrgMember
 import { UserOrganizationRelationship } from '../models/Organizations';
 import { AppError } from '../middleware/errorHandler';
 import { WeatherService } from '../services/weatherService';
 import { GeocodingService } from '../services/geocodingService';
-import { TagService } from '../services/tagService';
+import { TagService, AttendeeWithDetails } from '../services/tagService'; // Import AttendeeWithDetails
 
 const eventService = new EventService();
 const orgService = new OrgService();
@@ -76,7 +76,7 @@ eventRouter.post('/', checkOrgAdmin, async (req: Request, res: Response, next: N
             const to: string = membersEmail.toString();
             const subject: string = `An update from PhotoComp!`;
             const message: string = `Don't miss updates on this event: ${req.body.title} - ${req.body.date}.
-                Know more by checking out the website!`;
+                    Know more by checking out the website!`;
             const header: string = `A new event in ${orgName} has been created!`;
 
             res.locals.user.emailInfo = { to, message, header, subject };
@@ -91,8 +91,9 @@ eventRouter.post('/', checkOrgAdmin, async (req: Request, res: Response, next: N
 /*
  * Get the organizations events
  * GET /events
+ * Protected by checkOrgMember middleware
  */
-eventRouter.get('/', async (req: Request, res: Response, next: NextFunction) => {
+eventRouter.get('/', checkOrgMember, async (req: Request, res: Response, next: NextFunction) => {
     const orgID: string = req.params.orgId;
     try {
         const events: Event[] = await eventService.getAllOrganizationEvents(orgID);
@@ -106,6 +107,42 @@ eventRouter.get('/', async (req: Request, res: Response, next: NextFunction) => 
         next(error);
     }
 });
+
+/*
+ * Get details of a specific event *AND* its attendees with details
+ * GET /events/:eid
+ * Protected by checkOrgMember middleware
+ */
+eventRouter.get(
+    '/:eid',
+    checkOrgMember, // Ensure only org members can access event details
+    async (req: Request, res: Response, next: NextFunction) => {
+        try {
+            const eventId: string = req.params.eid;
+            const orgId: string = req.params.orgId; // Get orgId from route params
+
+            // Fetch event details
+            const eventDetails = await eventService.findEventById(eventId);
+            if (!eventDetails) {
+                throw new AppError('Event not found', 404);
+            }
+
+            // Fetch attendees with their details using the updated TagService method
+            const attendees: AttendeeWithDetails[] = await tagService.getEventAttendeesWithDetails(eventId);
+
+            // Return both event details and attendee details
+            return res.status(200).json({
+                status: 'success',
+                data: {
+                    event: eventDetails,
+                    attendees: attendees, // Return the enriched attendee list
+                },
+            });
+        } catch (error) {
+            next(error);
+        }
+    }
+);
 
 /*
  * Update event's publicity
@@ -143,8 +180,9 @@ eventRouter.patch(
 /*
  * Create an Attendance record for an event
  * POST /events/:eid
+ * Protected by checkOrgMember middleware
  */
-eventRouter.post('/:eid', async (req: Request, res: Response, next: NextFunction) => {
+eventRouter.post('/:eid', checkOrgMember, async (req: Request, res: Response, next: NextFunction) => {
     try {
         const eventId: string = req.params.eid;
         const member = res.locals.user as { id: string; email: string; role: string };
@@ -165,38 +203,18 @@ eventRouter.post('/:eid', async (req: Request, res: Response, next: NextFunction
 /*
  * Remove the Attendance record for an event
  * DELETE /events/:eid
+ * Protected by checkOrgMember middleware
  */
-eventRouter.delete('/:eid', async (req: Request, res: Response, next: NextFunction) => {
+eventRouter.delete('/:eid', checkOrgMember, async (req: Request, res: Response, next: NextFunction) => {
     try {
         const eventId: string = req.params.eid;
         const member = res.locals.user as { id: string; email: string; role: string };
 
         await eventService.removeEventUser(member.id, eventId);
 
-        return res.status(201).json({
+        return res.status(200).json({ // Changed status to 200 for successful DELETE
             status: 'success',
             message: 'Attendance removed successfully',
-        });
-    } catch (error) {
-        next(error);
-    }
-});
-
-/*
- * Get all attendees of an event
- * GET /events/:eid
- */
-eventRouter.get('/:eid', async (req: Request, res: Response, next: NextFunction) => {
-    try {
-        const eventId: string = req.params.eid;
-
-        const attendees = await tagService.getEventAttendees(eventId);
-
-        return res.status(201).json({
-            status: 'success',
-            data: {
-                attendees
-            },
         });
     } catch (error) {
         next(error);
@@ -378,7 +396,7 @@ eventRouter.patch(
 );
 
 /*
- * Get all a User's Events 
+ * Get all a User's Events
  * GET /users/:userId/events
  */
 export const getUserEvents = async (req: Request, res: Response, next: NextFunction) => {
@@ -398,12 +416,12 @@ export const getUserEvents = async (req: Request, res: Response, next: NextFunct
                     ...request,
                     event: eventDetails
                         ? {
-                              title: eventDetails.title,
-                              description: eventDetails.description,
-                              date: eventDetails.date,
-                              weather: eventDetails.weather,
-                              location: eventDetails.location,
-                          }
+                            title: eventDetails.title,
+                            description: eventDetails.description,
+                            date: eventDetails.date,
+                            weather: eventDetails.weather,
+                            location: eventDetails.location,
+                        }
                         : null,
                 };
             })

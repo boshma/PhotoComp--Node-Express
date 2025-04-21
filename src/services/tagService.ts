@@ -7,6 +7,14 @@ import { AppError } from '../middleware/errorHandler';
 import { Photo } from '../models/Photo';
 import { logger } from '../util/logger';
 import { UserService } from './userService';
+import { EventUser } from '../models/Event'; // Import EventUser
+import { User } from '../models/User'; // Import User
+
+// Define a new type for attendee with details
+export interface AttendeeWithDetails {
+    attendeeInfo: EventUser; // Keep the original EventUser info
+    userDetails: Omit<User, 'password'> | null; // Add user details (without password)
+}
 
 export class TagService {
     private tagRepository: TagRepository;
@@ -20,7 +28,7 @@ export class TagService {
         photoRepository: PhotoRepository = new PhotoRepository(),
         s3Service: S3Service = new S3Service(),
         eventRepository: EventRepository = new EventRepository(),
-        userService: UserService = new UserService()
+        userService: UserService = new UserService() // Ensure userService is initialized
     ) {
         this.tagRepository = tagRepository;
         this.photoRepository = photoRepository;
@@ -50,8 +58,8 @@ export class TagService {
                 throw new AppError('Photo does not belong to the specified event', 400);
             }
 
-            // Get all users attending the event
-            const attendingUsers = await this.getEventAttendees(eventId);
+            // Get all users attending the event (just their IDs in USER#userId format)
+            const attendingUserIds = await this.getEventAttendees(eventId); // Use the ID-only version here
 
             // Create tags for each user who is attending the event
             const tags: Tag[] = [];
@@ -65,8 +73,8 @@ export class TagService {
                     continue;
                 }
 
-                // Check if the user is attending the event
-                const isAttending = attendingUsers.some(attendee => attendee === userId);
+                // Check if the user is attending the event by comparing against the fetched IDs
+                const isAttending = attendingUserIds.some(attendeeId => attendeeId === `USER#${userId}`);
                 if (!isAttending) {
                     invalidUsers.push(`User ${userId} is not attending this event`);
                     continue;
@@ -103,16 +111,68 @@ export class TagService {
     }
 
     /**
-     * Gets all users who are attending an event
+     * Gets all users attending an event along with their details.
      * @param eventId The event ID
-     * @returns Array of user IDs
+     * @returns Array of AttendeeWithDetails objects
+     * @throws AppError if fetching fails
+     */
+    async getEventAttendeesWithDetails(eventId: string): Promise<AttendeeWithDetails[]> {
+        try {
+            // Fetch the basic EventUser records for attendees
+            const eventUsers: EventUser[] = await this.eventRepository.getEventAttendees(eventId);
+
+            if (!eventUsers || eventUsers.length === 0) {
+                return [];
+            }
+
+            // Fetch user details for each attendee
+            const attendeesWithDetails = await Promise.all(
+                eventUsers.map(async (eventUser) => {
+                    // Extract userId from the PK (format: USER#userId)
+                    const userId = eventUser.PK.split('#')[1];
+                    let userDetails: Omit<User, 'password'> | null = null;
+
+                    if (userId) {
+                        try {
+                            const user = await this.userService.getUserById(userId);
+                            if (user) {
+                                // Exclude password before assigning
+                                const { password, ...details } = user;
+                                userDetails = details;
+                            }
+                        } catch (userError) {
+                            logger.error(`Failed to fetch details for user ${userId}:`, userError);
+                            // Keep userDetails as null if fetch fails
+                        }
+                    }
+
+                    return {
+                        attendeeInfo: eventUser, // Keep the original EventUser record
+                        userDetails: userDetails,
+                    };
+                })
+            );
+
+            return attendeesWithDetails;
+        } catch (error) {
+            logger.error('Error getting event attendees with details:', error);
+            if (error instanceof AppError) {
+                throw error;
+            }
+            throw new AppError(`Failed to get event attendees: ${(error as Error).message}`, 500);
+        }
+    }
+
+    /**
+     * Gets all users who are attending an event (Only IDs - kept for potential internal use)
+     * @param eventId The event ID
+     * @returns Array of user IDs (format USER#userId)
      */
     async getEventAttendees(eventId: string): Promise<string[]> {
         try {
-            // This method would need to be implemented in the EventRepository
-            // For now, we'll assume it exists and returns user IDs
             const eventUsers = await this.eventRepository.getEventAttendees(eventId);
-            return eventUsers.map(eu => eu.split('#')[1]); // Extract user IDs from USER#id format
+            // Return the PK which is in USER#userId format
+            return eventUsers.map(eu => eu.PK);
         } catch (error) {
             logger.error('Error getting event attendees:', error);
             throw new AppError(`Failed to get event attendees: ${(error as Error).message}`, 500);
@@ -143,8 +203,25 @@ export class TagService {
             // Refresh pre-signed URLs for all photos
             for (const photo of validPhotos) {
                 try {
-                    if (photo?.metadata?.s3Key) {
+                    // Check if the photo has the new urls structure
+                    if (photo.metadata?.s3Keys) {
+                        // Generate fresh pre-signed URLs for all sizes
+                        photo.urls = await this.s3Service.getMultiplePreSignedUrls(photo.metadata.s3Keys);
+                        // Update the main URL to be the original for backward compatibility
+                        photo.url = photo.urls.original;
+                    } else if (photo?.metadata?.s3Key) {
+                        // Legacy photo - just update the main URL
                         photo.url = await this.s3Service.getLogoPreSignedUrl(photo.metadata.s3Key);
+                    } else if (photo?.url) {
+                        // Very old format - try to extract the key from the URL
+                        try {
+                            const urlParts = new URL(photo.url);
+                            const s3Key = urlParts.pathname.substring(1); // Remove leading slash
+                            photo.url = await this.s3Service.getLogoPreSignedUrl(s3Key);
+                        } catch (error) {
+                            logger.error(`Error refreshing pre-signed URL for photo: ${error}`);
+                            // Keep original URL if parsing fails
+                        }
                     }
                 } catch (error) {
                     logger.error(`Error refreshing pre-signed URL: ${error}`);
@@ -186,11 +263,11 @@ export class TagService {
                         tag,
                         user: user
                             ? {
-                                  id: user.id,
-                                  email: user.email,
-                                  firstName: user.firstName,
-                                  lastName: user.lastName,
-                              }
+                                id: user.id,
+                                email: user.email,
+                                firstName: user.firstName,
+                                lastName: user.lastName,
+                            }
                             : null,
                     };
                 })
