@@ -25,7 +25,7 @@ export class ImageService {
     // Define standard sizes for different use cases
     static readonly SIZES = {
         THUMBNAIL: { width: 200, quality: 80 },
-        MEDIUM: { width: 500, quality: 85 },
+        MEDIUM: { width: 400, quality: 85 },
         LARGE: { width: 1600, quality: 90 },
     };
 
