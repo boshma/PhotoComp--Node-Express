@@ -8,7 +8,7 @@ export class PhotoRepository {
      * Creates a new photo record in the database
      * @param photo The photo object to create
      * @returns The created photo
-     * @throws AppError if the operation fails
+     * @throws AppError if the operation fails 
      */
     async createPhoto(photo: Photo): Promise<Photo> {
         try {
