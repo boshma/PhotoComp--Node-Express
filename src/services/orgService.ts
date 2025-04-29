@@ -11,6 +11,7 @@ import {
 } from '../models/Organizations';
 import { AppError } from '../middleware/errorHandler';
 import { UserRole } from '../models/User';
+import { logger } from '../util/logger';
 
 export class OrgService {
     private orgRepository: OrgRepository;
@@ -164,6 +165,8 @@ export class OrgService {
         }
     }
 
+    // src/services/orgService.ts - Updated methods
+
     async findOrgsByUser(userId: string): Promise<Organization[] | null> {
         try {
             const results = await this.orgRepository.findOrgsByUser(userId);
@@ -177,9 +180,43 @@ export class OrgService {
                 if (org.logoS3Key) {
                     try {
                         org.logoUrl = await this.s3Service.getLogoPreSignedUrl(org.logoS3Key);
+                        logger.debug(`Refreshed logo URL for organization ${org.name} in findOrgsByUser`);
                     } catch (error) {
-                        // Log the error but continue processing other organizations
-                        console.error(`Error getting pre-signed URL for ${org.name}:`, error);
+                        logger.error(`Error refreshing logo URL for org ${org.name || org.id}:`, error);
+
+                        // Try to use existing URL if present
+                        if (org.logoUrl) {
+                            try {
+                                const urlParts = new URL(org.logoUrl);
+                                const s3Key = urlParts.pathname.substring(1); // Remove leading slash
+                                if (s3Key) {
+                                    org.logoUrl = await this.s3Service.getLogoPreSignedUrl(s3Key);
+                                    logger.info(`Successfully parsed and refreshed URL from existing logoUrl for ${org.name}`);
+                                }
+                            } catch (parseError) {
+                                logger.error(`Error parsing organization logo URL: ${parseError}`);
+                                // Keep existing URL if parsing fails
+                            }
+                        }
+                    }
+                } else if (org.logoUrl) {
+                    // No S3 key but URL exists - try to extract key from URL
+                    try {
+                        const urlParts = new URL(org.logoUrl);
+                        const s3Key = urlParts.pathname.substring(1); // Remove leading slash
+                        if (s3Key) {
+                            try {
+                                const newUrl = await this.s3Service.getLogoPreSignedUrl(s3Key);
+                                org.logoUrl = newUrl;
+                                logger.info(`Generated new URL from existing logoUrl for ${org.name}`);
+                            } catch (urlError) {
+                                logger.error(`Error refreshing URL from extracted key: ${urlError}`);
+                                // Keep original URL if refresh fails
+                            }
+                        }
+                    } catch (parseError) {
+                        logger.error(`Error parsing organization logo URL: ${parseError}`);
+                        // Keep original URL if parsing fails
                     }
                 }
             }

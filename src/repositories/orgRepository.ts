@@ -82,17 +82,85 @@ export class OrgRepository {
             const org = result.Item as Organization;
             if (org.logoS3Key) {
                 try {
+                    // Generate a new pre-signed URL for the logo
                     org.logoUrl = await this.s3Service.getLogoPreSignedUrl(org.logoS3Key);
                     logger.debug(`Refreshed logo URL for organization ${org.name}`);
                 } catch (error) {
                     logger.error(`Error refreshing logo URL for org ${org.name}:`, error);
-                    // If we can't generate a new URL, at least keep the existing one
+
+                    // Try to extract key from an existing URL if available as fallback
+                    if (!org.logoUrl || org.logoUrl.trim() === '') {
+                        logger.warn(`No existing URL to parse for org ${org.name}`);
+                    } else {
+                        try {
+                            const urlParts = new URL(org.logoUrl);
+                            const s3Key = urlParts.pathname.substring(1); // Remove leading slash
+                            org.logoUrl = await this.s3Service.getLogoPreSignedUrl(s3Key);
+                            logger.info(`Successfully parsed and refreshed URL from existing logoUrl for ${org.name}`);
+                        } catch (parseError) {
+                            logger.error(`Error parsing organization logo URL for ${org.name}: ${parseError}`);
+                            // At this point, we've tried everything - just keep existing URL
+                        }
+                    }
+                }
+            } else if (org.logoUrl) {
+                // No S3 key but URL exists - try to extract key from URL and update the record
+                try {
+                    const urlParts = new URL(org.logoUrl);
+                    const s3Key = urlParts.pathname.substring(1); // Remove leading slash
+
+                    if (s3Key) {
+                        try {
+                            // Generate a fresh pre-signed URL
+                            const newUrl = await this.s3Service.getLogoPreSignedUrl(s3Key);
+
+                            // Update the organization object
+                            org.logoUrl = newUrl;
+                            org.logoS3Key = s3Key; // Save the extracted key for future use
+
+                            // Optionally update the database record with the extracted S3 key
+                            this.updateOrgLogoS3Key(name, s3Key).catch(err => {
+                                logger.error(`Failed to update organization record with extracted S3 key: ${err.message}`);
+                            });
+
+                            logger.info(`Extracted S3 key from URL and refreshed for org ${org.name}`);
+                        } catch (urlError) {
+                            logger.error(`Error generating pre-signed URL from extracted key for org ${org.name}: ${urlError}`);
+                            // Keep original URL if regeneration fails
+                        }
+                    }
+                } catch (parseError) {
+                    logger.error(`Error parsing organization logo URL for ${org.name}: ${parseError}`);
+                    // Keep original URL if parsing fails
                 }
             }
 
             return org;
         } catch (error: any) {
             throw new AppError(`Failed to find organization by name: ${error.message}`, 500);
+        }
+    }
+
+    // Helper method to update organization record with extracted S3 key
+    private async updateOrgLogoS3Key(orgName: string, s3Key: string): Promise<void> {
+        try {
+            await dynamoDb.send(
+                new UpdateCommand({
+                    TableName: TABLE_NAME,
+                    Key: {
+                        PK: `ORG#${orgName.toUpperCase()}`,
+                        SK: 'ENTITY',
+                    },
+                    UpdateExpression: 'SET logoS3Key = :logoS3Key',
+                    ExpressionAttributeValues: {
+                        ':logoS3Key': s3Key
+                    }
+                })
+            );
+            logger.info(`Updated organization ${orgName} record with extracted S3 key`);
+        } catch (error) {
+            // Just log the error but don't fail the main operation
+            logger.error(`Failed to update organization with extracted S3 key: ${(error as Error).message}`);
         }
     }
 
@@ -165,32 +233,32 @@ export class OrgRepository {
             const updateExpressions = [];
             const expressionAttributeNames: Record<string, string> = {};
             const expressionAttributeValues: Record<string, any> = {};
-    
+
             if (org.description !== undefined && org.description.trim() !== '') {
                 updateExpressions.push('#description = :description');
                 expressionAttributeNames['#description'] = 'description';
                 expressionAttributeValues[':description'] = org.description;
             }
-    
+
             if (org.logoUrl !== undefined && org.logoUrl.trim() !== '') {
                 updateExpressions.push('logoUrl = :logoUrl');
                 expressionAttributeValues[':logoUrl'] = org.logoUrl;
             }
-    
+
             if (org.website !== undefined && org.website.trim() !== '') {
                 updateExpressions.push('website = :website');
                 expressionAttributeValues[':website'] = org.website;
             }
-    
+
             if (org.contactEmail !== undefined && org.contactEmail.trim() !== '') {
                 updateExpressions.push('contactEmail = :contactEmail');
                 expressionAttributeValues[':contactEmail'] = org.contactEmail;
             }
-    
+
             if (updateExpressions.length === 0) {
                 throw new AppError('No valid fields provided to update', 400);
             }
-    
+
             const updatedOrg = await dynamoDb.send(
                 new UpdateCommand({
                     TableName: TABLE_NAME,
@@ -204,68 +272,68 @@ export class OrgRepository {
                     ReturnValues: 'ALL_NEW',
                 })
             );
-    
+
             if (!updatedOrg.Attributes) {
                 throw new AppError('Organization not updated', 400);
             }
-    
+
             return org;
         } catch (error: any) {
             throw new AppError(`Failed to update organization: ${error.message}`, 500);
         }
     }
-    
+
 
     async findAllPublicOrgs(
-    lastEvaluatedKey?: Record<string, any>
-): Promise<{ orgs: Organization[]; newLastEvaluatedKey: Record<string, any> | null }> {
-    try {
-        const queryParams: any = {
-            TableName: TABLE_NAME,
-            IndexName: 'GSI1PK-GSI1SK-INDEX',
-            KeyConditionExpression: 'GSI1PK = :orgKey and begins_with(GSI1SK, :orgName)',
-            ExpressionAttributeValues: {
-                ':orgKey': `ORG`,
-                ':orgName': `ORG#`,
-            },
-            Limit: 9,
-        };
+        lastEvaluatedKey?: Record<string, any>
+    ): Promise<{ orgs: Organization[]; newLastEvaluatedKey: Record<string, any> | null }> {
+        try {
+            const queryParams: any = {
+                TableName: TABLE_NAME,
+                IndexName: 'GSI1PK-GSI1SK-INDEX',
+                KeyConditionExpression: 'GSI1PK = :orgKey and begins_with(GSI1SK, :orgName)',
+                ExpressionAttributeValues: {
+                    ':orgKey': `ORG`,
+                    ':orgName': `ORG#`,
+                },
+                Limit: 9,
+            };
 
-        if (lastEvaluatedKey && 
-            lastEvaluatedKey.PK && 
-            lastEvaluatedKey.SK && 
-            lastEvaluatedKey.GSI1PK && 
-            lastEvaluatedKey.GSI1SK) {
-            queryParams.ExclusiveStartKey = lastEvaluatedKey;
-        }
+            if (lastEvaluatedKey &&
+                lastEvaluatedKey.PK &&
+                lastEvaluatedKey.SK &&
+                lastEvaluatedKey.GSI1PK &&
+                lastEvaluatedKey.GSI1SK) {
+                queryParams.ExclusiveStartKey = lastEvaluatedKey;
+            }
 
-        const result: any = await dynamoDb.send(new QueryCommand(queryParams));
-        
-        // Generate fresh presigned URLs for all organization logos
-        const orgs = result.Items as Organization[];
-        for (const org of orgs) {
-            if (org.logoS3Key) {
-                try {
-                    // Generate a new pre-signed URL for the logo
-                    org.logoUrl = await this.s3Service.getLogoPreSignedUrl(org.logoS3Key);
-                    logger.debug(`Refreshed logo URL for organization ${org.name} in findAllPublicOrgs`);
-                } catch (error) {
-                    // Log the error but continue processing other organizations
-                    logger.error(`Error refreshing logo URL for org ${org.name || org.id}:`, error);
-                    // If we can't generate a new URL, at least keep the existing one
+            const result: any = await dynamoDb.send(new QueryCommand(queryParams));
+
+            // Generate fresh presigned URLs for all organization logos
+            const orgs = result.Items as Organization[];
+            for (const org of orgs) {
+                if (org.logoS3Key) {
+                    try {
+                        // Generate a new pre-signed URL for the logo
+                        org.logoUrl = await this.s3Service.getLogoPreSignedUrl(org.logoS3Key);
+                        logger.debug(`Refreshed logo URL for organization ${org.name} in findAllPublicOrgs`);
+                    } catch (error) {
+                        // Log the error but continue processing other organizations
+                        logger.error(`Error refreshing logo URL for org ${org.name || org.id}:`, error);
+                        // If we can't generate a new URL, at least keep the existing one
+                    }
                 }
             }
-        }
 
-        return {
-            orgs: orgs,
-            newLastEvaluatedKey: result.LastEvaluatedKey || null
-        };
-    } catch (error: any) {
-        console.error("findAllPublicOrgs error:", error);
-        throw new AppError(`Failed to find organizations: ${error.message}`, 500);
+            return {
+                orgs: orgs,
+                newLastEvaluatedKey: result.LastEvaluatedKey || null
+            };
+        } catch (error: any) {
+            console.error("findAllPublicOrgs error:", error);
+            throw new AppError(`Failed to find organizations: ${error.message}`, 500);
+        }
     }
-}
 
     /**
      * Get all members of an organization

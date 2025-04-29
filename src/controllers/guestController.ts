@@ -11,6 +11,7 @@ const s3Service = new S3Service();
 
 export const guestRouter = Router();
 
+
 /*
  * Should be able to view all the public organizations, and their public
  * events.
@@ -48,9 +49,41 @@ guestRouter.get(`/`, async (req: Request, res: Response, next: NextFunction) => 
                     org.logoUrl = await s3Service.getLogoPreSignedUrl(org.logoS3Key);
                     logger.debug(`Refreshed logo URL for organization ${org.name} in guest route`);
                 } catch (error) {
-                    // Log the error but continue processing other organizations
                     logger.error(`Error refreshing logo URL for org ${org.name || org.id}:`, error);
-                    // If we can't generate a new URL, at least keep the existing one
+
+                    // Try to use existing URL as fallback if S3Key is invalid
+                    if (org.logoUrl) {
+                        try {
+                            const urlParts = new URL(org.logoUrl);
+                            const s3Key = urlParts.pathname.substring(1); // Remove leading slash
+                            if (s3Key) {
+                                org.logoUrl = await s3Service.getLogoPreSignedUrl(s3Key);
+                                logger.info(`Successfully parsed and refreshed URL from existing logoUrl for ${org.name}`);
+                            }
+                        } catch (parseError) {
+                            logger.error(`Error parsing organization logo URL: ${parseError}`);
+                            // Keep original URL if parsing fails
+                        }
+                    }
+                }
+            } else if (org.logoUrl) {
+                // No S3 key but URL exists - try to extract key from URL
+                try {
+                    const urlParts = new URL(org.logoUrl);
+                    const s3Key = urlParts.pathname.substring(1); // Remove leading slash
+                    if (s3Key) {
+                        try {
+                            const newUrl = await s3Service.getLogoPreSignedUrl(s3Key);
+                            org.logoUrl = newUrl;
+                            logger.info(`Generated new URL from existing logoUrl for ${org.name}`);
+                        } catch (urlError) {
+                            logger.error(`Error refreshing URL from extracted key: ${urlError}`);
+                            // Keep original URL if refresh fails
+                        }
+                    }
+                } catch (parseError) {
+                    logger.error(`Error parsing organization logo URL: ${parseError}`);
+                    // Keep original URL if parsing fails
                 }
             }
         }
