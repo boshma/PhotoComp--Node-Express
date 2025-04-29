@@ -60,10 +60,10 @@ export class S3Repository {
     /**
      * Generates a pre-signed URL for accessing an S3 object
      * @param key The S3 key of the object
-     * @param expiresIn The expiration time in seconds (default: 604800 = 7 days, the maximum)
+     * @param expiresIn The expiration time in seconds (default: 10 seconds)
      * @returns The pre-signed URL
      */
-    async getPreSignedUrl(key: string, expiresIn: number = 604800): Promise<string> {
+    async getPreSignedUrl(key: string, expiresIn: number = 10): Promise<string> {
         try {
             const command = new GetObjectCommand({
                 Bucket: S3_BUCKET_NAME,
@@ -84,12 +84,12 @@ export class S3Repository {
     /**
      * Generates multiple pre-signed URLs for accessing S3 objects
      * @param keys Array of S3 keys
-     * @param expiresIn The expiration time in seconds (default: 604800 = 7 days, the maximum)
+     * @param expiresIn The expiration time in seconds (default: 10 seconds)
      * @returns Object mapping keys to their pre-signed URLs
      */
     async getMultiplePreSignedUrls(
         keys: string[],
-        expiresIn: number = 604800
+        expiresIn: number = 10
     ): Promise<Record<string, string>> {
         try {
             const urlPromises = keys.map(async key => ({
@@ -119,13 +119,13 @@ export class S3Repository {
      * Generates a pre-signed URL for downloading an S3 object with a specific filename
      * @param key The S3 key of the object
      * @param filename The suggested filename for the download
-     * @param expiresIn The expiration time in seconds (default: 604800 = 7 days, the maximum)
+     * @param expiresIn The expiration time in seconds (default: 10 seconds)
      * @returns The pre-signed URL with content-disposition header set
      */
     async getDownloadPreSignedUrl(
         key: string,
         filename: string,
-        expiresIn: number = 604800
+        expiresIn: number = 10
     ): Promise<string> {
         try {
             const command = new GetObjectCommand({
